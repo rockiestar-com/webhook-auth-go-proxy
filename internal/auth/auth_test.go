@@ -15,8 +15,8 @@ func TestCodeGenerationAndVerification(t *testing.T) {
 		t.Fatalf("Failed to generate code: %v", err)
 	}
 
-	if len(code) != 6 {
-		t.Errorf("Expected 6 digit code, got %s", code)
+	if len(code) != 32 {
+		t.Errorf("Expected 32 character code, got %s (len=%d)", code, len(code))
 	}
 
 	if !VerifyCode(code) {

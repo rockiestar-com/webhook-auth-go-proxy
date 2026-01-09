@@ -29,18 +29,13 @@ func init() {
 	}
 }
 
-// GenerateCode creates a 6-digit code, stores it, and returns it
+// GenerateCode creates a 32-character hex code, stores it, and returns it
 func GenerateCode() (string, error) {
-	const chars = "0123456789"
-	result := make([]byte, 6)
-	randBytes := make([]byte, 6)
-	if _, err := rand.Read(randBytes); err != nil {
+	bytes := make([]byte, 16) // 16 bytes = 32 hex chars
+	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	for i, b := range randBytes {
-		result[i] = chars[b%byte(len(chars))]
-	}
-	code := string(result)
+	code := hex.EncodeToString(bytes)
 
 	codesMu.Lock()
 	pendingCodes[code] = time.Now().Add(5 * time.Minute) // 5 minute expiry

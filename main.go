@@ -54,7 +54,7 @@ const loginHTML = `
         <div id="step2" style="display: none;">
             <p>A code has been sent to the Discord channel.</p>
             <form action="/login" method="POST">
-                <input type="text" name="code" placeholder="Enter 6-digit code" required autocomplete="off">
+                <input type="text" name="code" placeholder="Enter 32-character code" required autocomplete="off">
                 <button type="submit">Login</button>
             </form>
             <button class="secondary" onclick="showStep1()">Back</button>
