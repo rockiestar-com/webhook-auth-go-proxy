@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"html/template"
@@ -9,7 +10,10 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"webhook-auth-proxy/internal/auth"
@@ -98,9 +102,26 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatal(err)
+	// Graceful shutdown
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
+
+	log.Println("Server exiting")
 }
 
 // -- Handlers --
@@ -151,6 +172,11 @@ func handleSendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	username := r.FormValue("username")
+	if len(username) > 50 {
+		username = username[:50] // Truncate long names
+	}
+
 	code, err := auth.GenerateCode(cfg.CodeLength)
 	if err != nil {
 		log.Printf("Error generating code: %v", err)
@@ -161,8 +187,10 @@ func handleSendCode(w http.ResponseWriter, r *http.Request) {
 	// Construct public URL
 	publicURL := fmt.Sprintf("%s/login?code=%s", determineBaseURL(r), code)
 
+	country := r.Header.Get("CF-IPCountry")
+
 	go func() {
-		if err := discord.SendNotification(cfg.DiscordWebhookURL, code, publicURL); err != nil {
+		if err := discord.SendNotification(cfg.DiscordWebhookURL, code, publicURL, username, clientIP, country); err != nil {
 			log.Printf("Failed to send notification: %v", err)
 		}
 	}()

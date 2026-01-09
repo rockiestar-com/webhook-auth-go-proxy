@@ -5,20 +5,54 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // SendNotification sends the login code to the Discord webhook
-func SendNotification(webhookURL, code, link string) error {
+func SendNotification(webhookURL, code, link, username, ip, country string) error {
+	description := fmt.Sprintf("**Code:** `%s`\n[Click here to login](%s)", code, link)
+
+	fields := []map[string]interface{}{}
+
+	// User Field
+	userVal := "Anonymous"
+	if username != "" {
+		userVal = username
+	}
+	fields = append(fields, map[string]interface{}{
+		"name":   "User",
+		"value":  userVal,
+		"inline": true,
+	})
+
+	// IP Field
+	fields = append(fields, map[string]interface{}{
+		"name":   "IP Address",
+		"value":  ip,
+		"inline": true,
+	})
+
+	// Country Field (only if present)
+	if country != "" {
+		fields = append(fields, map[string]interface{}{
+			"name":   "Country",
+			"value":  country,
+			"inline": true,
+		})
+	}
+
 	payload := map[string]interface{}{
 		"content": nil,
 		"embeds": []map[string]interface{}{
 			{
 				"title":       "🔐 Login Request",
-				"description": fmt.Sprintf("A login attempt was requested.\n\n**Code:** `%s`\n\n[Click here to login](%s)", code, link),
+				"description": description,
 				"color":       5763719, // Blurple
+				"fields":      fields,
 				"footer": map[string]string{
 					"text": "Code expires in 5 minutes",
 				},
+				"timestamp": time.Now().Format(time.RFC3339),
 			},
 		},
 	}
