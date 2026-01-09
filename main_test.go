@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 	"webhook-auth-proxy/internal/auth"
 	"webhook-auth-proxy/internal/config"
+	"webhook-auth-proxy/internal/limiter"
 )
 
 func TestHealthCheck(t *testing.T) {
@@ -56,7 +58,11 @@ func TestSendCodeRateLimit(t *testing.T) {
 	// We need to set dummy config
 	cfg = &config.Config{
 		DiscordWebhookURL: "http://localhost:9999/webhook", // Dummy URL
+		RateLimitPerHour:  100,
 	}
+
+	// Initialize rate limiter
+	rateLimiter = limiter.New(cfg.RateLimitPerHour, time.Hour)
 
 	// Reset auth state
 	auth.ClearCodesForTest()

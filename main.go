@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -13,12 +14,14 @@ import (
 	"webhook-auth-proxy/internal/auth"
 	"webhook-auth-proxy/internal/config"
 	"webhook-auth-proxy/internal/discord"
+	"webhook-auth-proxy/internal/limiter"
 )
 
 // Global state
 var (
-	cfg   *config.Config
-	proxy *httputil.ReverseProxy
+	cfg         *config.Config
+	proxy       *httputil.ReverseProxy
+	rateLimiter *limiter.Limiter
 )
 
 // HTML Template for the login page
@@ -96,6 +99,9 @@ const loginHTML = `
                         showStep2();
                         document.getElementById('message').textContent = "Code sent!";
                         document.getElementById('message').className = "message success";
+                    } else if (res.status === 429) {
+                        document.getElementById('message').textContent = "Rate limit exceeded. Try again later.";
+                        document.getElementById('message').className = "message error";
                     } else {
                         document.getElementById('message').textContent = "Failed to send code.";
                         document.getElementById('message').className = "message error";
@@ -165,6 +171,9 @@ func main() {
 	log.Printf("Starting proxy on port %s", cfg.Port)
 	log.Printf("Upstream: %s", cfg.UpstreamURL)
 	log.Printf("Session key generated (ephemeral)")
+	log.Printf("Rate limit: %d requests per hour per IP", cfg.RateLimitPerHour)
+
+	rateLimiter = limiter.New(cfg.RateLimitPerHour, 1*time.Hour)
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -218,6 +227,13 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 func handleSendCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Rate Limit Check
+	clientIP := getClientIP(r)
+	if !rateLimiter.Allow(clientIP) {
+		http.Error(w, "Rate limit exceeded. Please try again later.", http.StatusTooManyRequests)
 		return
 	}
 
@@ -284,4 +300,26 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// but simple redirect is fine for this scope.
 		http.Redirect(w, r, "/login", http.StatusFound)
 	}
+}
+
+func getClientIP(r *http.Request) string {
+	// 1. Check CF-Connecting-IP (Cloudflare)
+	if cfIP := r.Header.Get("CF-Connecting-IP"); cfIP != "" {
+		return cfIP
+	}
+
+	// 2. Check X-Forwarded-For
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// XFF can be a comma-separated list of IPs. The first one is the client.
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+
+	// 3. Fallback to RemoteAddr
+	// RemoteAddr is "IP:Port"
+	ip := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		return host
+	}
+	return ip
 }
