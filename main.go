@@ -1,39 +1,24 @@
 package main
 
 import (
-	"bytes"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strings"
-	"sync"
 	"time"
-)
 
-// Config holds the application configuration
-type Config struct {
-	Port              string
-	UpstreamURL       string
-	DiscordWebhookURL string
-}
+	"webhook-auth-proxy/internal/auth"
+	"webhook-auth-proxy/internal/config"
+	"webhook-auth-proxy/internal/discord"
+)
 
 // Global state
 var (
-	config       Config
-	sessionKey   []byte
-	pendingCodes = make(map[string]time.Time)
-	codesMu      sync.RWMutex
-	proxy        *httputil.ReverseProxy
+	cfg   *config.Config
+	proxy *httputil.ReverseProxy
 )
 
 // HTML Template for the login page
@@ -131,32 +116,19 @@ const loginHTML = `
 `
 
 func init() {
-	// Initialize configuration
-	config.Port = os.Getenv("PORT")
-	if config.Port == "" {
-		config.Port = "8080"
-	}
-
-	config.UpstreamURL = os.Getenv("UPSTREAM_URL")
-	config.DiscordWebhookURL = os.Getenv("DISCORD_WEBHOOK_URL")
-
-	// Generate a random session key on startup
-	sessionKey = make([]byte, 32)
-	if _, err := rand.Read(sessionKey); err != nil {
-		log.Fatal("Failed to generate session key:", err)
-	}
+	cfg = config.LoadFromEnv()
 }
 
 func main() {
 	// Validate essential config
-	if config.UpstreamURL == "" {
+	if cfg.UpstreamURL == "" {
 		log.Fatal("UPSTREAM_URL environment variable is required")
 	}
-	if config.DiscordWebhookURL == "" {
+	if cfg.DiscordWebhookURL == "" {
 		log.Fatal("DISCORD_WEBHOOK_URL environment variable is required")
 	}
 
-	targetURL, err := url.Parse(config.UpstreamURL)
+	targetURL, err := url.Parse(cfg.UpstreamURL)
 	if err != nil {
 		log.Fatalf("Invalid UPSTREAM_URL: %v", err)
 	}
@@ -190,12 +162,12 @@ func main() {
 	// Catch-all (protected)
 	mux.HandleFunc("/", authMiddleware(handleProxy))
 
-	log.Printf("Starting proxy on port %s", config.Port)
-	log.Printf("Upstream: %s", config.UpstreamURL)
+	log.Printf("Starting proxy on port %s", cfg.Port)
+	log.Printf("Upstream: %s", cfg.UpstreamURL)
 	log.Printf("Session key generated (ephemeral)")
 
 	server := &http.Server{
-		Addr:         ":" + config.Port,
+		Addr:         ":" + cfg.Port,
 		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -217,7 +189,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		// Check if already logged in
-		if validateSession(r) {
+		if auth.ValidateSession(r) {
 			http.Redirect(w, r, "/", http.StatusFound)
 			return
 		}
@@ -234,8 +206,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		code := r.FormValue("code")
-		if verifyCode(code) {
-			setSessionCookie(w)
+		if auth.VerifyCode(code) {
+			auth.SetSessionCookie(w)
 			http.Redirect(w, r, "/", http.StatusFound)
 		} else {
 			http.Redirect(w, r, "/login?error=1", http.StatusFound)
@@ -249,24 +221,51 @@ func handleSendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	code, err := generateCode()
+	code, err := auth.GenerateCode()
 	if err != nil {
 		log.Printf("Error generating code: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	// Construct public URL for convenience (best effort guess based on Host header)
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	publicURL := fmt.Sprintf("%s://%s/login?code=%s", scheme, r.Host, code)
+	// Construct public URL
+	publicURL := fmt.Sprintf("%s/login?code=%s", determineBaseURL(r), code)
 
-	go sendDiscordNotification(code, publicURL)
+	go func() {
+		if err := discord.SendNotification(cfg.DiscordWebhookURL, code, publicURL); err != nil {
+			log.Printf("Failed to send notification: %v", err)
+		}
+	}()
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Code sent"))
+}
+
+func determineBaseURL(r *http.Request) string {
+	// Determine Scheme
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	// X-Forwarded-Proto is standard for proxies (Cloudflare, Nginx, Traefik)
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if cfVisitor := r.Header.Get("CF-Visitor"); cfVisitor != "" {
+		// Fallback for Cloudflare if X-Forwarded-Proto is missing
+		// CF-Visitor is JSON: {"scheme":"https"}
+		if strings.Contains(cfVisitor, "\"scheme\":\"https\"") {
+			scheme = "https"
+		}
+	}
+
+	// Determine Host
+	host := r.Host
+	// X-Forwarded-Host is standard
+	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+		host = forwardedHost
+	}
+
+	return fmt.Sprintf("%s://%s", scheme, host)
 }
 
 func handleProxy(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +276,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if validateSession(r) {
+		if auth.ValidateSession(r) {
 			next(w, r)
 			return
 		}
@@ -285,141 +284,4 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// but simple redirect is fine for this scope.
 		http.Redirect(w, r, "/login", http.StatusFound)
 	}
-}
-
-// -- Helpers --
-
-// generateCode creates a 6-digit code, stores it, and returns it
-func generateCode() (string, error) {
-	b := make([]byte, 3) // 3 bytes = 6 hex chars? No, let's just do random number.
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	// Simple 6 hex chars for robustness/entropy or just random digits.
-	// Users prefer digits.
-	// Let's do a secure random number.
-	const chars = "0123456789"
-	result := make([]byte, 6)
-	randBytes := make([]byte, 6)
-	if _, err := rand.Read(randBytes); err != nil {
-		return "", err
-	}
-	for i, b := range randBytes {
-		result[i] = chars[b%byte(len(chars))]
-	}
-	code := string(result)
-
-	codesMu.Lock()
-	pendingCodes[code] = time.Now().Add(5 * time.Minute) // 5 minute expiry
-	// Cleanup old codes
-	for k, v := range pendingCodes {
-		if time.Now().After(v) {
-			delete(pendingCodes, k)
-		}
-	}
-	codesMu.Unlock()
-
-	return code, nil
-}
-
-func verifyCode(code string) bool {
-	codesMu.Lock()
-	defer codesMu.Unlock()
-
-	expiry, exists := pendingCodes[code]
-	if !exists {
-		return false
-	}
-
-	if time.Now().After(expiry) {
-		delete(pendingCodes, code)
-		return false
-	}
-
-	// Consume code (one-time use)
-	delete(pendingCodes, code)
-	return true
-}
-
-func sendDiscordNotification(code, link string) {
-	payload := map[string]interface{}{
-		"content": nil,
-		"embeds": []map[string]interface{}{
-			{
-				"title":       "🔐 Login Request",
-				"description": fmt.Sprintf("A login attempt was requested.\n\n**Code:** `%s`\n\n[Click here to login](%s)", code, link),
-				"color":       5763719, // Blurple
-				"footer": map[string]string{
-					"text": "Code expires in 5 minutes",
-				},
-			},
-		},
-	}
-
-	body, _ := json.Marshal(payload)
-	resp, err := http.Post(config.DiscordWebhookURL, "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		log.Printf("Failed to send webhook: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		log.Printf("Discord API returned error: %d", resp.StatusCode)
-	}
-}
-
-// -- Session Management (Signed Cookie) --
-
-const cookieName = "auth_session"
-
-func setSessionCookie(w http.ResponseWriter) {
-	// Create a random session ID
-	sessionID := make([]byte, 16)
-	rand.Read(sessionID)
-	sessionIDStr := hex.EncodeToString(sessionID)
-
-	// Sign it
-	mac := hmac.New(sha256.New, sessionKey)
-	mac.Write([]byte(sessionIDStr))
-	signature := mac.Sum(nil)
-
-	// Value = sessionID + "." + signature
-	cookieValue := sessionIDStr + "." + base64.URLEncoding.EncodeToString(signature)
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieName,
-		Value:    cookieValue,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   false, // Can be true if behind TLS proxy, but keeping simple for now
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   86400 * 7, // 7 days
-	})
-}
-
-func validateSession(r *http.Request) bool {
-	cookie, err := r.Cookie(cookieName)
-	if err != nil {
-		return false
-	}
-
-	parts := strings.Split(cookie.Value, ".")
-	if len(parts) != 2 {
-		return false
-	}
-
-	sessionIDStr := parts[0]
-	signatureStr := parts[1]
-
-	signature, err := base64.URLEncoding.DecodeString(signatureStr)
-	if err != nil {
-		return false
-	}
-
-	mac := hmac.New(sha256.New, sessionKey)
-	mac.Write([]byte(sessionIDStr))
-	expectedSignature := mac.Sum(nil)
-
-	return hmac.Equal(signature, expectedSignature)
 }

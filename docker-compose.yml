@@ -1,0 +1,25 @@
+services:
+  proxy:
+    # Use the image built from this repo (or build locally for dev)
+    build: .
+    image: ghcr.io/rockiestar-com/webhook-auth-go-proxy:latest
+    container_name: auth-proxy
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      # Points to the 'whoami' container within the docker network
+      - UPSTREAM_URL=http://upstream-app:80
+      # REPLACE THIS with your actual Discord Webhook URL
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+    depends_on:
+      - upstream-app
+    restart: unless-stopped
+
+  # Example upstream service
+  upstream-app:
+    image: traefik/whoami
+    container_name: upstream-app
+    expose:
+      - "80"
+    restart: unless-stopped
