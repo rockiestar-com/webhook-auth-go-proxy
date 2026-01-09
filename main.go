@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"fmt"
 	"html/template"
 	"log"
@@ -17,115 +18,29 @@ import (
 	"webhook-auth-proxy/internal/limiter"
 )
 
+//go:embed templates/login.html
+var templateFS embed.FS
+
 // Global state
 var (
 	cfg         *config.Config
 	proxy       *httputil.ReverseProxy
 	rateLimiter *limiter.Limiter
+	loginTmpl   *template.Template
 )
-
-// HTML Template for the login page
-const loginHTML = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Restricted Access</title>
-    <style>
-        body { font-family: -apple-system, system-ui, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f0f2f5; margin: 0; }
-        .card { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; max-width: 400px; text-align: center; }
-        input { padding: 10px; margin: 10px 0; width: 100%; box-sizing: border-box; border: 1px solid #ddd; border-radius: 4px; }
-        button { background: #5865F2; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; margin-top: 10px; }
-        button:hover { background: #4752C4; }
-        .secondary { background: #ddd; color: #333; }
-        .secondary:hover { background: #ccc; }
-        .message { margin-top: 1rem; color: #666; font-size: 0.9rem; }
-        .error { color: #dc3545; }
-        .success { color: #28a745; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Restricted Access</h2>
-        
-        <div id="step1">
-            <p>Please authenticate to access this service.</p>
-            <button onclick="requestToken()" id="reqBtn">Send Login Code to Discord</button>
-        </div>
-
-        <div id="step2" style="display: none;">
-            <p>A code has been sent to the Discord channel.</p>
-            <form action="/login" method="POST">
-                <input type="text" name="code" placeholder="Enter code" required autocomplete="off">
-                <button type="submit">Login</button>
-            </form>
-            <button class="secondary" onclick="showStep1()">Back</button>
-        </div>
-        
-        <div id="message" class="message"></div>
-    </div>
-
-    <script>
-        const msgParams = new URLSearchParams(window.location.search);
-        if (msgParams.has('error')) {
-            const el = document.getElementById('message');
-            el.textContent = "Invalid or expired code.";
-            el.className = "message error";
-        }
-        if (msgParams.has('code')) {
-             document.querySelector('input[name="code"]').value = msgParams.get('code');
-             showStep2();
-        }
-
-        function showStep1() {
-            document.getElementById('step1').style.display = 'block';
-            document.getElementById('step2').style.display = 'none';
-        }
-
-        function showStep2() {
-            document.getElementById('step1').style.display = 'none';
-            document.getElementById('step2').style.display = 'block';
-        }
-
-        function requestToken() {
-            const btn = document.getElementById('reqBtn');
-            btn.disabled = true;
-            btn.textContent = "Sending...";
-            
-            fetch('/send-code', { method: 'POST' })
-                .then(res => {
-                    if (res.ok) {
-                        showStep2();
-                        document.getElementById('message').textContent = "Code sent!";
-                        document.getElementById('message').className = "message success";
-                    } else if (res.status === 429) {
-                        document.getElementById('message').textContent = "Rate limit exceeded. Try again later.";
-                        document.getElementById('message').className = "message error";
-                    } else {
-                        document.getElementById('message').textContent = "Failed to send code.";
-                        document.getElementById('message').className = "message error";
-                    }
-                })
-                .catch(err => {
-                    document.getElementById('message').textContent = "Error connecting to server.";
-                    document.getElementById('message').className = "message error";
-                })
-                .finally(() => {
-                    btn.disabled = false;
-                    btn.textContent = "Send Login Code to Discord";
-                });
-        }
-    </script>
-</body>
-</html>
-`
 
 func init() {
 	cfg = config.LoadFromEnv()
 }
 
 func main() {
+	// Parse template on startup
+	var err error
+	loginTmpl, err = template.ParseFS(templateFS, "templates/login.html")
+	if err != nil {
+		log.Fatalf("Failed to parse login template: %v", err)
+	}
+
 	// Validate essential config
 	if cfg.UpstreamURL == "" {
 		log.Fatal("UPSTREAM_URL environment variable is required")
@@ -204,12 +119,11 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Render login page
-		tmpl, err := template.New("login").Parse(loginHTML)
-		if err != nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := loginTmpl.Execute(w, nil); err != nil {
+			log.Printf("Template execution error: %v", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
 		}
-		tmpl.Execute(w, nil)
 		return
 	}
 
