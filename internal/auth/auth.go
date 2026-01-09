@@ -29,9 +29,18 @@ func init() {
 	}
 }
 
-// GenerateCode creates a 32-character hex code, stores it, and returns it
-func GenerateCode() (string, error) {
-	bytes := make([]byte, 16) // 16 bytes = 32 hex chars
+// GenerateCode creates a hex code of specified length, stores it, and returns it.
+// Length is in characters, so bytes needed = length / 2
+func GenerateCode(length int) (string, error) {
+	if length <= 0 {
+		length = 32
+	}
+	// Ensure even length for hex encoding
+	if length%2 != 0 {
+		length++
+	}
+
+	bytes := make([]byte, length/2)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}

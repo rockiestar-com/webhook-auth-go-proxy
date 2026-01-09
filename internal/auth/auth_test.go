@@ -10,13 +10,23 @@ import (
 func TestCodeGenerationAndVerification(t *testing.T) {
 	ClearCodesForTest()
 
-	code, err := GenerateCode()
+	// Test default 32 char
+	code, err := GenerateCode(32)
 	if err != nil {
 		t.Fatalf("Failed to generate code: %v", err)
 	}
 
 	if len(code) != 32 {
 		t.Errorf("Expected 32 character code, got %s (len=%d)", code, len(code))
+	}
+
+	// Test custom length
+	code16, err := GenerateCode(16)
+	if err != nil {
+		t.Fatalf("Failed to generate code: %v", err)
+	}
+	if len(code16) != 16 {
+		t.Errorf("Expected 16 character code, got %s (len=%d)", code16, len(code16))
 	}
 
 	if !VerifyCode(code) {

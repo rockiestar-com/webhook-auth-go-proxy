@@ -54,7 +54,7 @@ const loginHTML = `
         <div id="step2" style="display: none;">
             <p>A code has been sent to the Discord channel.</p>
             <form action="/login" method="POST">
-                <input type="text" name="code" placeholder="Enter 32-character code" required autocomplete="off">
+                <input type="text" name="code" placeholder="Enter code" required autocomplete="off">
                 <button type="submit">Login</button>
             </form>
             <button class="secondary" onclick="showStep1()">Back</button>
@@ -221,7 +221,7 @@ func handleSendCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	code, err := auth.GenerateCode()
+	code, err := auth.GenerateCode(cfg.CodeLength)
 	if err != nil {
 		log.Printf("Error generating code: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
