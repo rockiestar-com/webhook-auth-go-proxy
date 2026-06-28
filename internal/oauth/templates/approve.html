@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Access Approval</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-50 flex items-center justify-center min-h-screen p-4">
+    <div class="w-full max-w-md bg-white rounded-xl shadow-lg overflow-hidden">
+        <div class="p-8">
+            {{if .Error}}
+            <!-- Error state -->
+            <div class="flex justify-center mb-6">
+                <div class="bg-red-100 p-3 rounded-full">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                </div>
+            </div>
+            <h2 class="text-2xl font-bold text-center text-gray-800 mb-2">Error</h2>
+            <p class="text-gray-500 text-center text-sm">{{.Error}}</p>
+
+            {{else if .Success}}
+            <!-- Success state -->
+            <div class="flex justify-center mb-6">
+                <div class="bg-green-100 p-3 rounded-full">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                </div>
+            </div>
+            <h2 class="text-2xl font-bold text-center text-gray-800 mb-2">Done</h2>
+            <p class="text-gray-500 text-center text-sm mb-4">{{.Success}}</p>
+            <p class="text-gray-400 text-center text-xs">You can close this tab.</p>
+
+            {{else}}
+            <!-- Approval form -->
+            <div class="flex justify-center mb-6">
+                <div class="bg-amber-100 p-3 rounded-full">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                </div>
+            </div>
+            <h2 class="text-2xl font-bold text-center text-gray-800 mb-2">MCP Access Request</h2>
+            <p class="text-gray-500 text-center mb-6 text-sm">A coding agent is requesting access to the MCP server.</p>
+
+            <div class="bg-gray-50 rounded-lg p-4 mb-6 space-y-3">
+                <div class="flex justify-between text-sm">
+                    <span class="text-gray-500">Client</span>
+                    <span class="font-medium text-gray-800">{{.ClientName}}</span>
+                </div>
+                <div class="flex justify-between text-sm">
+                    <span class="text-gray-500">IP Address</span>
+                    <span class="font-mono text-gray-800">{{.ClientIP}}</span>
+                </div>
+                {{if .Country}}
+                <div class="flex justify-between text-sm">
+                    <span class="text-gray-500">Country</span>
+                    <span class="text-gray-800">{{.Country}}</span>
+                </div>
+                {{end}}
+                <div class="flex justify-between text-sm">
+                    <span class="text-gray-500">Requested</span>
+                    <span class="text-gray-800">{{.CreatedAt}}</span>
+                </div>
+            </div>
+
+            <div class="flex space-x-3">
+                <form method="POST" class="flex-1">
+                    <input type="hidden" name="request_id" value="{{.RequestID}}">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <input type="hidden" name="action" value="deny">
+                    <button type="submit" class="w-full bg-red-50 hover:bg-red-100 text-red-600 font-medium py-3 px-4 rounded-lg transition duration-200 border border-red-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                        Deny
+                    </button>
+                </form>
+                <form method="POST" class="flex-1">
+                    <input type="hidden" name="request_id" value="{{.RequestID}}">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <input type="hidden" name="action" value="approve">
+                    <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200 shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                        Approve
+                    </button>
+                </form>
+            </div>
+            {{end}}
+        </div>
+        <div class="bg-gray-50 px-8 py-4 border-t border-gray-100 text-center">
+            <p class="text-xs text-gray-400">MCP OAuth 2.1 &middot; Secured by Webhook Auth Proxy</p>
+        </div>
+    </div>
+</body>
+</html>

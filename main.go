@@ -20,6 +20,7 @@ import (
 	"webhook-auth-proxy/internal/config"
 	"webhook-auth-proxy/internal/discord"
 	"webhook-auth-proxy/internal/limiter"
+	"webhook-auth-proxy/internal/oauth"
 )
 
 //go:embed templates/login.html
@@ -31,6 +32,8 @@ var (
 	proxy       *httputil.ReverseProxy
 	rateLimiter *limiter.Limiter
 	loginTmpl   *template.Template
+	oauthSrv    *oauth.Server
+	oauthH      *oauth.Handlers
 )
 
 func init() {
@@ -75,6 +78,10 @@ func main() {
 		}
 	}
 
+	// Initialize OAuth 2.1 server for MCP clients
+	oauthSrv = oauth.NewServer()
+	oauthH = oauth.NewHandlers(oauthSrv, cfg.DiscordWebhookURL, discord.SendMCPApprovalNotification)
+
 	mux := http.NewServeMux()
 
 	// Health check (public)
@@ -83,6 +90,16 @@ func main() {
 	// Auth routes (public)
 	mux.HandleFunc("/login", handleLogin)
 	mux.HandleFunc("/send-code", handleSendCode)
+
+	// OAuth 2.1 routes (public — CSRF-protected where needed)
+	mux.HandleFunc("/.well-known/oauth-protected-resource", oauthH.HandleProtectedResourceMetadata)
+	mux.HandleFunc("/.well-known/oauth-authorization-server", oauthH.HandleAuthServerMetadata)
+	mux.HandleFunc("/oauth/register", oauthH.HandleRegister)
+	mux.HandleFunc("/oauth/authorize", oauthH.HandleAuthorize)
+	mux.HandleFunc("/oauth/status", oauthH.HandleStatus)
+	mux.HandleFunc("/oauth/approve", oauthH.HandleApprove)
+	mux.HandleFunc("/oauth/token", oauthH.HandleToken)
+	mux.HandleFunc("/oauth/revoke", oauthH.HandleRevoke)
 
 	// Catch-all (protected)
 	mux.HandleFunc("/", authMiddleware(handleProxy))
@@ -234,14 +251,43 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// 1. Session cookie (existing browser auth)
 		if auth.ValidateSession(r) {
 			next(w, r)
 			return
 		}
-		// Redirect to login, preserving original path if complex logic needed,
-		// but simple redirect is fine for this scope.
+
+		// 2. Bearer token (OAuth 2.1 / MCP clients)
+		if token := extractBearerToken(r); token != "" {
+			if oauthSrv.ValidateAccessToken(token) {
+				next(w, r)
+				return
+			}
+		}
+
+		// 3. No valid auth — decide response format
+		authHeader := r.Header.Get("Authorization")
+		accept := r.Header.Get("Accept")
+
+		if authHeader != "" || (accept != "" && !strings.Contains(accept, "text/html") && !strings.Contains(accept, "*/*")) {
+			// API/MCP client: return 401 with OAuth metadata pointer
+			resourceURL := determineBaseURL(r) + "/.well-known/oauth-protected-resource"
+			w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s"`, resourceURL))
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		// Browser: redirect to login (existing behavior)
 		http.Redirect(w, r, "/login", http.StatusFound)
 	}
+}
+
+func extractBearerToken(r *http.Request) string {
+	v := r.Header.Get("Authorization")
+	if strings.HasPrefix(v, "Bearer ") {
+		return v[7:]
+	}
+	return ""
 }
 
 func getClientIP(r *http.Request) string {

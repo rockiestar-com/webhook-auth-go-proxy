@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Authorization</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 1; } 100% { transform: scale(1.4); opacity: 0; } }
+        .pulse-ring { animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite; }
+    </style>
+</head>
+<body class="bg-gray-50 flex items-center justify-center min-h-screen p-4">
+    <div class="w-full max-w-md bg-white rounded-xl shadow-lg overflow-hidden">
+        <div class="p-8">
+            <!-- Waiting state -->
+            <div id="state-waiting">
+                <div class="flex justify-center mb-6">
+                    <div class="relative">
+                        <div class="bg-amber-100 p-3 rounded-full">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div class="absolute inset-0 bg-amber-100 rounded-full pulse-ring"></div>
+                    </div>
+                </div>
+                <h2 class="text-2xl font-bold text-center text-gray-800 mb-2">Waiting for Approval</h2>
+                <p class="text-gray-500 text-center mb-6 text-sm">A notification was sent to Discord. An admin needs to approve this access request.</p>
+                <div class="flex items-center justify-center space-x-2 text-sm text-gray-400">
+                    <svg class="animate-spin h-4 w-4 text-amber-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span id="countdown">Expires in 5:00</span>
+                </div>
+            </div>
+
+            <!-- Approved state -->
+            <div id="state-approved" class="hidden">
+                <div class="flex justify-center mb-6">
+                    <div class="bg-green-100 p-3 rounded-full">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                        </svg>
+                    </div>
+                </div>
+                <h2 class="text-2xl font-bold text-center text-gray-800 mb-2">Access Approved</h2>
+                <p class="text-gray-500 text-center text-sm">Redirecting to complete authorization...</p>
+            </div>
+
+            <!-- Denied state -->
+            <div id="state-denied" class="hidden">
+                <div class="flex justify-center mb-6">
+                    <div class="bg-red-100 p-3 rounded-full">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </div>
+                </div>
+                <h2 class="text-2xl font-bold text-center text-gray-800 mb-2">Access Denied</h2>
+                <p class="text-gray-500 text-center text-sm">The admin denied this access request. You can close this tab.</p>
+            </div>
+
+            <!-- Expired state -->
+            <div id="state-expired" class="hidden">
+                <div class="flex justify-center mb-6">
+                    <div class="bg-gray-100 p-3 rounded-full">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </div>
+                </div>
+                <h2 class="text-2xl font-bold text-center text-gray-800 mb-2">Request Expired</h2>
+                <p class="text-gray-500 text-center text-sm">This approval request has timed out. Please try connecting again.</p>
+            </div>
+        </div>
+        <div class="bg-gray-50 px-8 py-4 border-t border-gray-100 text-center">
+            <p class="text-xs text-gray-400">MCP OAuth 2.1 &middot; Secured by Webhook Auth Proxy</p>
+        </div>
+    </div>
+
+    <script>
+        const STATUS_URL = {{.StatusURL}};
+        const startTime = Date.now();
+        const TIMEOUT_MS = 5 * 60 * 1000;
+        let pollInterval;
+
+        function showState(name) {
+            ['waiting', 'approved', 'denied', 'expired'].forEach(s => {
+                document.getElementById('state-' + s).classList.toggle('hidden', s !== name);
+            });
+        }
+
+        function updateCountdown() {
+            const elapsed = Date.now() - startTime;
+            const remaining = Math.max(0, TIMEOUT_MS - elapsed);
+            const mins = Math.floor(remaining / 60000);
+            const secs = Math.floor((remaining % 60000) / 1000);
+            document.getElementById('countdown').textContent =
+                'Expires in ' + mins + ':' + secs.toString().padStart(2, '0');
+            if (remaining <= 0) {
+                showState('expired');
+                clearInterval(pollInterval);
+            }
+        }
+
+        function poll() {
+            fetch(STATUS_URL, { cache: 'no-store' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'approved' && data.redirect_url) {
+                        showState('approved');
+                        clearInterval(pollInterval);
+                        setTimeout(() => { window.location.href = data.redirect_url; }, 500);
+                    } else if (data.status === 'denied') {
+                        showState('denied');
+                        clearInterval(pollInterval);
+                    } else if (data.status === 'expired') {
+                        showState('expired');
+                        clearInterval(pollInterval);
+                    }
+                })
+                .catch(() => {});
+        }
+
+        pollInterval = setInterval(() => { poll(); updateCountdown(); }, 2000);
+        updateCountdown();
+    </script>
+</body>
+</html>
